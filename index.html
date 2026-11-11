@@ -1,0 +1,590 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>IHSG - Chart</title>
+<style>
+  :root{--bg:#131722;--panel:#1e222d;--line:#2a2e39;--txt:#d1d4dc;--mut:#787b86;--acc:#2962ff;--up:#26a69a;--dn:#ef5350}
+  *{box-sizing:border-box}
+  html,body{height:100%;margin:0;background:var(--bg);color:var(--txt);font:13px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+  #app{display:grid;grid-template-rows:46px 1fr;grid-template-columns:48px 1fr;height:100%}
+  header{grid-column:1/3;display:flex;align-items:center;gap:10px;padding:0 10px;background:var(--bg);border-bottom:1px solid var(--line);overflow-x:auto;white-space:nowrap}
+  header .sym b{font-size:15px;margin-right:6px}
+  header .sym span{color:var(--mut);font-size:12px}
+  header .px{font-weight:600;margin-left:6px}
+  .sep{width:1px;height:22px;background:var(--line);flex:none}
+  .grow{flex:1}
+  .seg{display:flex;background:var(--panel);border-radius:6px;overflow:hidden;flex:none}
+  button,select,input[type=color]{font:inherit;color:var(--txt)}
+  .seg button{background:none;border:0;padding:5px 10px;cursor:pointer;color:var(--mut)}
+  .seg button.on{background:var(--acc);color:#fff}
+  .seg button:hover:not(.on){color:#fff}
+  .btn{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:5px 10px;cursor:pointer;flex:none}
+  .btn:hover{border-color:var(--mut)}
+  .btn.on{background:var(--acc);border-color:var(--acc);color:#fff}
+  .btn.danger:hover{border-color:var(--dn);color:var(--dn)}
+  select{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:4px 6px}
+  input[type=color]{width:30px;height:28px;padding:0;border:1px solid var(--line);border-radius:6px;background:var(--panel);cursor:pointer}
+  .menu{position:relative;flex:none}
+  .dd{display:none;position:fixed;z-index:50;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:6px;min-width:190px;box-shadow:0 8px 24px rgba(0,0,0,.5)}
+  .dd.open{display:block}
+  .dd label{display:flex;align-items:center;gap:8px;padding:5px 8px;border-radius:4px;cursor:pointer}
+  .dd label:hover{background:#2a2e39}
+  .dd i{width:10px;height:10px;border-radius:2px;display:inline-block}
+  .dd hr{border:0;border-top:1px solid var(--line);margin:4px 0}
+  #tools{background:var(--bg);border-right:1px solid var(--line);display:flex;flex-direction:column;align-items:center;padding:8px 0;gap:4px}
+  #tools button{width:36px;height:36px;background:none;border:0;border-radius:6px;cursor:pointer;color:#b2b5be;display:grid;place-items:center}
+  #tools button:hover{background:var(--panel);color:#fff}
+  #tools button.on{background:var(--acc);color:#fff}
+  #tools svg{width:22px;height:22px;stroke:currentColor;fill:none;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
+  #tools .gap{height:1px;width:28px;background:var(--line);margin:4px 0}
+  #wrap{position:relative;overflow:hidden;min-width:0;min-height:0}
+  #chart{position:absolute;inset:0}
+  #ov{position:absolute;left:0;top:0;pointer-events:none;z-index:5}
+  #wrap.drawing #chart *{cursor:crosshair !important}
+  #legend{position:absolute;left:10px;top:8px;z-index:6;pointer-events:none;font-size:12px;text-shadow:0 0 4px var(--bg),0 0 4px var(--bg)}
+  #legend .t{font-size:14px;font-weight:600}
+  #legend .v b{font-weight:500;margin:0 8px 0 3px}
+  #legend .ind{color:var(--mut);margin-top:2px}
+  #ranges{position:absolute;left:10px;bottom:34px;z-index:6;display:flex;gap:2px}
+  #ranges button{background:rgba(30,34,45,.85);border:0;color:var(--mut);padding:3px 8px;border-radius:4px;cursor:pointer;font-size:12px}
+  #ranges button:hover{color:#fff;background:var(--acc)}
+  #hint{position:absolute;left:50%;transform:translateX(-50%);top:10px;z-index:7;background:var(--acc);color:#fff;padding:5px 12px;border-radius:14px;font-size:12px;display:none;pointer-events:none}
+  #toast{position:absolute;right:70px;bottom:40px;z-index:8;background:var(--panel);border:1px solid var(--line);padding:8px 12px;border-radius:8px;display:none;max-width:420px}
+  #empty{position:absolute;inset:0;z-index:4;display:none;place-items:center;text-align:center;color:var(--mut)}
+  .style-grp{display:flex;align-items:center;gap:6px;flex:none}
+</style>
+</head>
+<body>
+<div id="app">
+  <header>
+    <div class="sym"><b>IHSG</b><span>^JKSE &middot; IDX Composite</span><span class="px" id="px"></span></div>
+    <div class="sep"></div>
+    <div class="seg" id="tfSeg">
+      <button data-tf="D" class="on" title="Daily">D</button>
+      <button data-tf="W" title="Weekly">W</button>
+      <button data-tf="M" title="Monthly">M</button>
+    </div>
+    <div class="seg" id="typeSeg">
+      <button data-type="candle" class="on">Candles</button>
+      <button data-type="bar">Bars</button>
+      <button data-type="line">Line</button>
+      <button data-type="area">Area</button>
+    </div>
+    <div class="menu"><button class="btn" id="indBtn">Indicators &#9662;</button><div class="dd" id="indDd"></div></div>
+    <button class="btn" id="logBtn" title="Logarithmic price scale">Log</button>
+    <button class="btn" id="magBtn" title="Snap drawings to open/high/low/close">Magnet</button>
+    <div class="sep"></div>
+    <div class="style-grp" title="Colour / thickness of the selected drawing (or of the next one)">
+      <input type="color" id="col" value="#2962ff">
+      <select id="wid"><option value="1">1px</option><option value="2" selected>2px</option><option value="3">3px</option><option value="4">4px</option></select>
+      <button class="btn danger" id="delBtn" title="Delete selected (Del)">Delete</button>
+      <button class="btn" id="undoBtn" title="Undo (Ctrl+Z)">Undo</button>
+      <button class="btn danger" id="clearBtn" title="Remove all drawings">Clear all</button>
+    </div>
+    <div class="grow"></div>
+    <span id="info" style="color:var(--mut);font-size:12px"></span>
+    <button class="btn" id="shotBtn" title="Save PNG including drawings">Screenshot</button>
+    <button class="btn" id="refBtn" title="Download the latest data from yfinance into the database">Refresh data</button>
+  </header>
+
+  <aside id="tools"></aside>
+
+  <main id="wrap">
+    <div id="chart"></div>
+    <canvas id="ov"></canvas>
+    <div id="legend"></div>
+    <div id="ranges">
+      <button data-r="21">1M</button><button data-r="63">3M</button><button data-r="126">6M</button>
+      <button data-r="245">1Y</button><button data-r="1225">5Y</button><button data-r="0">All</button>
+    </div>
+    <div id="hint"></div>
+    <div id="toast"></div>
+    <div id="empty"><div><div style="font-size:18px;margin-bottom:6px">Database is empty</div>Click <b>Refresh data</b> to download IHSG history from yfinance.</div></div>
+  </main>
+</div>
+
+<script src="/lightweight-charts.js"></script>
+<script>
+(() => {
+'use strict';
+const LW = LightweightCharts;
+const $ = s => document.querySelector(s);
+const $$ = s => [...document.querySelectorAll(s)];
+
+/* ------------------------------------------------------------------ state */
+const S = {
+  tf: 'D', type: 'candle',
+  bars: [], T: [], byTime: new Map(), avg: 86400,
+  tool: 'cursor', drawings: [], selected: null, draft: null, measure: null, drag: null,
+  magnet: false, log: false, color: '#2962ff', width: 2,
+  ind: {sma20:false, sma50:true, sma200:true, ema20:false, bb:false, vol:true, rsi:false, macd:false},
+  hist: [],
+};
+
+/* ------------------------------------------------------------------ chart */
+const chartEl = $('#chart'), wrap = $('#wrap');
+const chart = LW.createChart(chartEl, {
+  autoSize: true,
+  layout: {background: {type: LW.ColorType.Solid, color: '#131722'}, textColor: '#b2b5be', fontSize: 12},
+  grid: {vertLines: {color: '#1b1f2b'}, horzLines: {color: '#1b1f2b'}},
+  crosshair: {mode: LW.CrosshairMode.Normal},
+  rightPriceScale: {borderColor: '#2a2e39', scaleMargins: {top: 0.08, bottom: 0.08}},
+  timeScale: {borderColor: '#2a2e39', rightOffset: 8, barSpacing: 7, minBarSpacing: 0.3},
+});
+const ts = chart.timeScale();
+const PF = {type: 'price', precision: 2, minMove: 0.01};
+const UP = '#26a69a', DN = '#ef5350';
+const sCandle = chart.addSeries(LW.CandlestickSeries, {upColor: UP, downColor: DN, borderVisible: false, wickUpColor: UP, wickDownColor: DN, priceFormat: PF});
+const sBar = chart.addSeries(LW.BarSeries, {upColor: UP, downColor: DN, priceFormat: PF, visible: false});
+const sLine = chart.addSeries(LW.LineSeries, {color: '#2962ff', lineWidth: 2, priceFormat: PF, visible: false});
+const sArea = chart.addSeries(LW.AreaSeries, {lineColor: '#2962ff', topColor: 'rgba(41,98,255,.35)', bottomColor: 'rgba(41,98,255,0)', priceFormat: PF, visible: false});
+const MAIN = {candle: sCandle, bar: sBar, line: sLine, area: sArea};
+const active = () => MAIN[S.type];
+
+const sVol = chart.addSeries(LW.HistogramSeries, {priceFormat: {type: 'volume'}, priceScaleId: 'vol', lastValueVisible: false, priceLineVisible: false});
+chart.priceScale('vol').applyOptions({scaleMargins: {top: 0.82, bottom: 0}});
+
+/* ------------------------------------------------------------- indicators */
+function sma(c, n) { const o = Array(c.length).fill(null); let s = 0;
+  for (let i = 0; i < c.length; i++) { s += c[i]; if (i >= n) s -= c[i - n]; if (i >= n - 1) o[i] = s / n; } return o; }
+function ema(c, n) { const o = Array(c.length).fill(null), k = 2 / (n + 1); let e = null;
+  for (let i = 0; i < c.length; i++) { if (i === n - 1) { e = c.slice(0, n).reduce((a, b) => a + b, 0) / n; o[i] = e; }
+    else if (i >= n) { e = c[i] * k + e * (1 - k); o[i] = e; } } return o; }
+function bb(c, n, m) { const mid = sma(c, n), up = [], lo = [];
+  for (let i = 0; i < c.length; i++) { if (mid[i] == null) { up.push(null); lo.push(null); continue; }
+    let v = 0; for (let j = i - n + 1; j <= i; j++) v += (c[j] - mid[i]) ** 2;
+    const sd = Math.sqrt(v / n); up.push(mid[i] + m * sd); lo.push(mid[i] - m * sd); }
+  return [up, mid, lo]; }
+function rsi(c, n) { const o = Array(c.length).fill(null); let g = 0, l = 0;
+  for (let i = 1; i < c.length; i++) { const d = c[i] - c[i - 1], u = Math.max(d, 0), dn = Math.max(-d, 0);
+    if (i <= n) { g += u; l += dn; if (i === n) { g /= n; l /= n; o[i] = l === 0 ? 100 : 100 - 100 / (1 + g / l); } }
+    else { g = (g * (n - 1) + u) / n; l = (l * (n - 1) + dn) / n; o[i] = l === 0 ? 100 : 100 - 100 / (1 + g / l); } }
+  return o; }
+function macd(c) { const f = ema(c, 12), s = ema(c, 26), m = c.map((_, i) => f[i] != null && s[i] != null ? f[i] - s[i] : null);
+  const idx = m.findIndex(v => v != null), sig = Array(c.length).fill(null);
+  if (idx >= 0) { const e = ema(m.slice(idx), 9); e.forEach((v, i) => sig[idx + i] = v); }
+  return [m, sig, m.map((v, i) => v != null && sig[i] != null ? v - sig[i] : null)]; }
+
+const toLine = arr => { const o = []; for (let i = 0; i < arr.length; i++) if (arr[i] != null) o.push({time: S.T[i], value: arr[i]}); return o; };
+const closes = () => S.bars.map(b => b.close);
+
+const OVERLAYS = {
+  sma20:  {label: 'SMA 20',  colors: ['#f5a623'], calc: c => [sma(c, 20)]},
+  sma50:  {label: 'SMA 50',  colors: ['#2196f3'], calc: c => [sma(c, 50)]},
+  sma200: {label: 'SMA 200', colors: ['#e040fb'], calc: c => [sma(c, 200)]},
+  ema20:  {label: 'EMA 20',  colors: ['#ffd54f'], calc: c => [ema(c, 20)]},
+  bb:     {label: 'Bollinger (20, 2)', colors: ['#26c6da', '#78909c', '#26c6da'], calc: c => bb(c, 20, 2)},
+};
+const live = {};        // overlay id -> [series]
+let subSeries = [];     // series living in lower panes
+
+function setOverlay(id, on) {
+  if (on && !live[id]) {
+    const o = OVERLAYS[id];
+    live[id] = o.colors.map(col => chart.addSeries(LW.LineSeries, {color: col, lineWidth: 1, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false}));
+    refreshOverlay(id);
+  } else if (!on && live[id]) {
+    live[id].forEach(s => chart.removeSeries(s)); delete live[id];
+  }
+}
+function refreshOverlay(id) {
+  if (!live[id] || !S.bars.length) return;
+  const data = OVERLAYS[id].calc(closes());
+  live[id].forEach((s, i) => s.setData(toLine(data[i])));
+}
+function rebuildSubs() {
+  subSeries.forEach(s => { try { chart.removeSeries(s); } catch (e) {} });
+  subSeries = [];
+  if (!S.bars.length) return;
+  const c = closes(); let pane = 1;
+  if (S.ind.rsi) {
+    const s = chart.addSeries(LW.LineSeries, {color: '#b388ff', lineWidth: 1, priceFormat: {type: 'price', precision: 1, minMove: 0.1}, priceLineVisible: false}, pane);
+    s.setData(toLine(rsi(c, 14)));
+    [70, 30].forEach(p => s.createPriceLine({price: p, color: '#555a66', lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: ''}));
+    subSeries.push(s); pane++;
+  }
+  if (S.ind.macd) {
+    const [m, sg, h] = macd(c);
+    const hs = chart.addSeries(LW.HistogramSeries, {priceLineVisible: false, lastValueVisible: false, priceFormat: {type: 'price', precision: 1, minMove: 0.1}}, pane);
+    hs.setData(h.map((v, i) => v == null ? null : {time: S.T[i], value: v, color: v >= 0 ? 'rgba(38,166,154,.7)' : 'rgba(239,83,80,.7)'}).filter(Boolean));
+    const ml = chart.addSeries(LW.LineSeries, {color: '#2196f3', lineWidth: 1, priceLineVisible: false, lastValueVisible: false}, pane);
+    ml.setData(toLine(m));
+    const sl = chart.addSeries(LW.LineSeries, {color: '#ff9800', lineWidth: 1, priceLineVisible: false, lastValueVisible: false}, pane);
+    sl.setData(toLine(sg));
+    subSeries.push(hs, ml, sl);
+  }
+  try { chart.panes().forEach((p, i) => { if (i > 0) p.setHeight(130); }); } catch (e) {}
+}
+
+/* indicators dropdown */
+(function buildDropdown() {
+  const rows = [
+    ...Object.entries(OVERLAYS).map(([id, o]) => [id, o.label, o.colors[0]]),
+    ['vol', 'Volume', '#78909c'], ['rsi', 'RSI (14)', '#b388ff'], ['macd', 'MACD (12, 26, 9)', '#2196f3'],
+  ];
+  $('#indDd').innerHTML = rows.map(([id, label, col]) =>
+    `<label><input type="checkbox" data-ind="${id}" ${S.ind[id] ? 'checked' : ''}><i style="background:${col}"></i>${label}</label>`).join('');
+  $$('#indDd input').forEach(cb => cb.addEventListener('change', () => {
+    const id = cb.dataset.ind; S.ind[id] = cb.checked;
+    if (OVERLAYS[id]) setOverlay(id, cb.checked);
+    else if (id === 'vol') sVol.applyOptions({visible: cb.checked});
+    else rebuildSubs();
+    updateLegend();
+  }));
+  $('#indBtn').addEventListener('click', e => {
+    const dd = $('#indDd'), r = e.currentTarget.getBoundingClientRect();
+    dd.style.left = r.left + 'px'; dd.style.top = (r.bottom + 4) + 'px'; dd.classList.toggle('open');
+    e.stopPropagation();
+  });
+  document.addEventListener('click', e => { if (!e.target.closest('#indDd')) $('#indDd').classList.remove('open'); });
+})();
+
+/* ------------------------------------------------------------------- data */
+function toast(msg, ms = 4000) { const t = $('#toast'); t.textContent = msg; t.style.display = 'block'; clearTimeout(toast.h); toast.h = setTimeout(() => t.style.display = 'none', ms); }
+
+async function loadData(keepView) {
+  const j = await (await fetch('/api/prices?tf=' + S.tf)).json();
+  S.bars = j.bars || [];
+  S.T = S.bars.map(b => b.time);
+  S.byTime = new Map(S.bars.map((b, i) => [b.time, i]));
+  const n = S.T.length;
+  $('#empty').style.display = n ? 'none' : 'grid';
+  if (n > 1) { const k = Math.min(20, n - 1); S.avg = Math.max(1, (S.T[n - 1] - S.T[n - 1 - k]) / k); }
+  const v = n ? null : [];
+  sCandle.setData(S.bars); sBar.setData(S.bars);
+  const lp = S.bars.map(b => ({time: b.time, value: b.close}));
+  sLine.setData(lp); sArea.setData(lp);
+  sVol.setData(S.bars.map(b => ({time: b.time, value: b.volume, color: b.close >= b.open ? 'rgba(38,166,154,.45)' : 'rgba(239,83,80,.45)'})));
+  Object.keys(live).forEach(refreshOverlay);
+  rebuildSubs();
+  if (n) { const l = S.bars[n - 1], p = S.bars[n - 2] || l, ch = l.close - p.close;
+    $('#px').innerHTML = `<span style="color:${ch >= 0 ? UP : DN}">${fmt(l.close)}&nbsp; ${ch >= 0 ? '+' : ''}${fmt(ch)} (${(ch / p.close * 100).toFixed(2)}%)</span>`; }
+  if (!keepView) showRange(S.tf === 'D' ? 245 : S.tf === 'W' ? 245 * 2 : 0);
+  updateLegend();
+}
+async function loadInfo() {
+  const i = await (await fetch('/api/info')).json();
+  $('#info').textContent = i.rows ? `${i.rows.toLocaleString()} rows \u00b7 ${i.first} \u2192 ${i.last}${i.demo ? ' \u00b7 DEMO DATA' : ''}` : '';
+}
+const fmt = v => v == null ? '' : v.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+
+function showRange(daysBars) {
+  const n = S.T.length; if (!n) return;
+  if (!daysBars) { ts.fitContent(); return; }
+  // daysBars is expressed in trading days; convert to the current timeframe
+  const k = S.tf === 'D' ? daysBars : S.tf === 'W' ? daysBars / 5 : daysBars / 21;
+  ts.setVisibleLogicalRange({from: Math.max(-5, n - k), to: n - 1 + 8});
+}
+$$('#ranges button').forEach(b => b.addEventListener('click', () => showRange(+b.dataset.r)));
+
+/* ----------------------------------------------------------------- legend */
+function updateLegend(t) {
+  const n = S.bars.length; if (!n) { $('#legend').innerHTML = ''; return; }
+  const i = t != null && S.byTime.has(t) ? S.byTime.get(t) : n - 1, b = S.bars[i], p = S.bars[i - 1] || b;
+  const ch = b.close - p.close, col = ch >= 0 ? UP : DN;
+  const d = new Date(b.time * 1000).toISOString().slice(0, 10);
+  const inds = Object.keys(OVERLAYS).filter(id => S.ind[id]).map(id => `<span style="color:${OVERLAYS[id].colors[0]}">${OVERLAYS[id].label}</span>`).join(' &nbsp; ');
+  $('#legend').innerHTML =
+    `<div class="t">IHSG &middot; ${S.tf} <span style="color:var(--mut);font-weight:400">${d}</span></div>` +
+    `<div class="v" style="color:${col}">O<b>${fmt(b.open)}</b>H<b>${fmt(b.high)}</b>L<b>${fmt(b.low)}</b>C<b>${fmt(b.close)}</b>` +
+    `${ch >= 0 ? '+' : ''}${fmt(ch)} (${(ch / p.close * 100).toFixed(2)}%) <span style="color:var(--mut)">&nbsp;Vol ${b.volume.toLocaleString()}</span></div>` +
+    (inds ? `<div class="ind">${inds}</div>` : '');
+}
+chart.subscribeCrosshairMove(p => updateLegend(p.time));
+
+/* ----------------------------------------------------- coordinate helpers */
+function idxOfTime(t) {
+  const T = S.T, n = T.length; if (!n) return null;
+  if (t <= T[0]) return (t - T[0]) / S.avg;
+  if (t >= T[n - 1]) return n - 1 + (t - T[n - 1]) / S.avg;
+  let lo = 0, hi = n - 1;
+  while (hi - lo > 1) { const m = (lo + hi) >> 1; if (T[m] <= t) lo = m; else hi = m; }
+  return (t - T[lo]) <= (T[hi] - t) ? lo : hi;
+}
+function timeOfIdx(i) {
+  const T = S.T, n = T.length;
+  if (i < 0) return Math.round(T[0] + i * S.avg);
+  if (i > n - 1) return Math.round(T[n - 1] + (i - (n - 1)) * S.avg);
+  return T[i];
+}
+const xOf = t => { const i = idxOfTime(t); return i == null ? null : ts.logicalToCoordinate(i); };
+const yOf = p => active().priceToCoordinate(p);
+const px = pt => ({x: xOf(pt.t), y: yOf(pt.p)});
+function pane0H() { try { return chart.panes()[0].getHeight(); } catch (e) { return chartEl.clientHeight - 28; } }
+
+function ptFromXY(x, y, magnet) {
+  const l = ts.coordinateToLogical(x); if (l == null) return null;
+  const i = Math.round(l); let p = active().coordinateToPrice(y); if (p == null) return null;
+  if (magnet && i >= 0 && i < S.bars.length) {
+    const b = S.bars[i]; let best = p, bd = 1e9;
+    [b.open, b.high, b.low, b.close].forEach(c => { const yy = yOf(c); if (yy != null) { const dd = Math.abs(yy - y); if (dd < bd) { bd = dd; best = c; } } });
+    if (bd < 35) p = best;
+  }
+  return {t: timeOfIdx(i), p};
+}
+
+/* ----------------------------------------------------------------- tools */
+const ICONS = {
+  cursor: '<path d="M6 3l12 8.5-5.2 1.2L16 19l-2.6 1.2-3.2-6.4L6 17z"/>',
+  trend:  '<path d="M4 19L20 5"/><circle cx="4" cy="19" r="2"/><circle cx="20" cy="5" r="2"/>',
+  ray:    '<path d="M4 18L21 6"/><circle cx="4" cy="18" r="2"/><path d="M17 5l4 1-1 4"/>',
+  hline:  '<path d="M3 12h18"/><circle cx="12" cy="12" r="2"/>',
+  vline:  '<path d="M12 3v18"/><circle cx="12" cy="12" r="2"/>',
+  rect:   '<rect x="4" y="6" width="16" height="12" rx="1"/>',
+  fib:    '<path d="M3 5h18M3 10h18M3 15h18M3 20h18"/><path d="M5 20L19 5" stroke-dasharray="2 2"/>',
+  text:   '<path d="M6 6h12M12 6v13M9 19h6"/>',
+  measure:'<path d="M3 17L17 3l4 4L7 21z"/><path d="M7 13l2 2M10 10l2 2M13 7l2 2"/>',
+};
+const TOOLS = {
+  cursor: {n: 0, label: 'Cursor (select / move drawings)'},
+  trend:  {n: 2, label: 'Trend line', hint: 'Click start point, then end point (or drag)'},
+  ray:    {n: 2, label: 'Ray', hint: 'Click start point, then a second point to set direction'},
+  hline:  {n: 1, label: 'Horizontal line', hint: 'Click to place'},
+  vline:  {n: 1, label: 'Vertical line', hint: 'Click to place'},
+  rect:   {n: 2, label: 'Rectangle', hint: 'Click one corner, then the opposite corner'},
+  fib:    {n: 2, label: 'Fib retracement', hint: 'Click the swing start, then the swing end'},
+  text:   {n: 1, label: 'Text label', hint: 'Click where the text goes'},
+  measure:{n: 2, label: 'Measure (price / % / bars)', hint: 'Click start, then end. Esc to clear'},
+};
+$('#tools').innerHTML = Object.entries(TOOLS).map(([k, v], i) =>
+  `${i === 1 || k === 'measure' ? '<div class="gap"></div>' : ''}<button data-tool="${k}" title="${v.label}"><svg viewBox="0 0 24 24">${ICONS[k]}</svg></button>`).join('');
+$$('#tools button').forEach(b => b.addEventListener('click', () => setTool(S.tool === b.dataset.tool ? 'cursor' : b.dataset.tool)));
+
+function setTool(t) {
+  S.tool = t; S.draft = null;
+  if (t !== 'cursor') S.selected = null;
+  if (t !== 'measure') S.measure = null;
+  $$('#tools button').forEach(b => b.classList.toggle('on', b.dataset.tool === t));
+  wrap.classList.toggle('drawing', t !== 'cursor');
+  const h = $('#hint'); if (t !== 'cursor') { h.textContent = TOOLS[t].hint; h.style.display = 'block'; } else h.style.display = 'none';
+  syncStyleUI();
+}
+setTool('cursor');
+
+/* ----------------------------------------------------------- persistence */
+const uid = () => Math.random().toString(36).slice(2, 9);
+const clean = () => JSON.stringify(S.drawings.map(({_w, ...r}) => r));
+function pushHist() { S.hist.push(clean()); if (S.hist.length > 50) S.hist.shift(); }
+function save() { clearTimeout(save.h); save.h = setTimeout(() => fetch('/api/drawings', {method: 'PUT', headers: {'Content-Type': 'application/json'}, body: clean()}).catch(() => {}), 300); }
+function undo() { const s = S.hist.pop(); if (s == null) return; S.drawings = JSON.parse(s); S.selected = null; save(); }
+async function loadDrawings() { try { S.drawings = await (await fetch('/api/drawings')).json(); } catch (e) { S.drawings = []; } }
+
+/* ------------------------------------------------------------ rendering */
+const cv = $('#ov'), ctx = cv.getContext('2d');
+const rgba = (hex, a) => { const h = hex.replace('#', ''); return `rgba(${parseInt(h.slice(0, 2), 16)},${parseInt(h.slice(2, 4), 16)},${parseInt(h.slice(4, 6), 16)},${a})`; };
+const FIB = [0, 0.236, 0.382, 0.5, 0.618, 0.786, 1];
+const FIBCOL = ['#787b86', '#f23645', '#ff9800', '#4caf50', '#089981', '#00bcd4', '#787b86'];
+
+function rayEnd(a, b, W) {
+  const dx = b.x - a.x, dy = b.y - a.y;
+  if (Math.abs(dx) < 1e-6) return {x: a.x, y: dy >= 0 ? 1e5 : -1e5};
+  const ex = dx > 0 ? W + 50 : -50; return {x: ex, y: a.y + dy / dx * (ex - a.x)};
+}
+function line(a, b) { ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke(); }
+function label(txt, x, y, col, align = 'left') {
+  ctx.font = '12px -apple-system,Segoe UI,Roboto,sans-serif'; ctx.textAlign = align; ctx.textBaseline = 'bottom';
+  ctx.fillStyle = col; ctx.fillText(txt, x, y);
+}
+
+function render(d, sel, W, H) {
+  const P = d.pts.map(px); if (P.some(p => p.x == null || p.y == null)) return;
+  ctx.setLineDash([]); ctx.strokeStyle = d.color; ctx.fillStyle = d.color; ctx.lineWidth = d.width || 2; ctx.lineCap = 'round';
+  switch (d.type) {
+    case 'trend': line(P[0], P[1]); break;
+    case 'ray': line(P[0], rayEnd(P[0], P[1], W)); break;
+    case 'hline': line({x: 0, y: P[0].y}, {x: W, y: P[0].y}); label(fmt(d.pts[0].p), W - 6, P[0].y - 3, d.color, 'right'); break;
+    case 'vline': line({x: P[0].x, y: 0}, {x: P[0].x, y: H}); break;
+    case 'rect': {
+      const x = Math.min(P[0].x, P[1].x), y = Math.min(P[0].y, P[1].y), w = Math.abs(P[0].x - P[1].x), h = Math.abs(P[0].y - P[1].y);
+      ctx.fillStyle = rgba(d.color, 0.15); ctx.fillRect(x, y, w, h); ctx.strokeRect(x, y, w, h); break; }
+    case 'fib': {
+      const xl = Math.min(P[0].x, P[1].x), xr = Math.max(P[0].x, P[1].x), p0 = d.pts[0].p, p1 = d.pts[1].p;
+      const ys = FIB.map(lv => yOf(p1 + (p0 - p1) * lv));
+      if (ys.some(y => y == null)) return;
+      for (let i = 0; i < FIB.length - 1; i++) { ctx.fillStyle = rgba(FIBCOL[i + 1], 0.08); ctx.fillRect(xl, Math.min(ys[i], ys[i + 1]), xr - xl, Math.abs(ys[i + 1] - ys[i])); }
+      FIB.forEach((lv, i) => { ctx.strokeStyle = FIBCOL[i]; ctx.lineWidth = 1; line({x: xl, y: ys[i]}, {x: xr, y: ys[i]});
+        label(`${lv} (${fmt(p1 + (p0 - p1) * lv)})`, xl + 4, ys[i] - 2, FIBCOL[i]); });
+      ctx.strokeStyle = d.color; ctx.setLineDash([4, 4]); ctx.lineWidth = 1; line(P[0], P[1]); ctx.setLineDash([]); break; }
+    case 'text': {
+      ctx.font = '600 14px -apple-system,Segoe UI,Roboto,sans-serif'; ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
+      d._w = ctx.measureText(d.text).width; ctx.fillStyle = d.color; ctx.fillText(d.text, P[0].x, P[0].y); break; }
+    case 'measure': {
+      const a = d.pts[0], b = d.pts[1], dp = b.p - a.p, pc = dp / a.p * 100;
+      const nb = Math.round(Math.abs(idxOfTime(b.t) - idxOfTime(a.t))), dy = Math.round(Math.abs(b.t - a.t) / 86400);
+      const c = dp >= 0 ? UP : DN, x = Math.min(P[0].x, P[1].x), y = Math.min(P[0].y, P[1].y), w = Math.abs(P[0].x - P[1].x), h = Math.abs(P[0].y - P[1].y);
+      ctx.fillStyle = rgba(c, 0.18); ctx.fillRect(x, y, w, h); ctx.strokeStyle = c; ctx.lineWidth = 1; ctx.strokeRect(x, y, w, h);
+      ctx.setLineDash([3, 3]); line({x: (P[0].x + P[1].x) / 2, y: P[0].y}, {x: (P[0].x + P[1].x) / 2, y: P[1].y}); line({x: P[0].x, y: (P[0].y + P[1].y) / 2}, {x: P[1].x, y: (P[0].y + P[1].y) / 2}); ctx.setLineDash([]);
+      const t1 = `${dp >= 0 ? '+' : ''}${fmt(dp)} (${pc.toFixed(2)}%)`, t2 = `${nb} bars \u00b7 ${dy} days`;
+      ctx.font = '12px -apple-system,Segoe UI,Roboto,sans-serif'; const bw = Math.max(ctx.measureText(t1).width, ctx.measureText(t2).width) + 16, bx = x + w / 2 - bw / 2, by = P[1].y < P[0].y ? y - 46 : y + h + 6;
+      ctx.fillStyle = c; ctx.beginPath(); ctx.roundRect ? ctx.roundRect(bx, by, bw, 40, 5) : ctx.rect(bx, by, bw, 40); ctx.fill();
+      ctx.fillStyle = '#fff'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(t1, bx + bw / 2, by + 13); ctx.fillText(t2, bx + bw / 2, by + 28); break; }
+  }
+  if (sel && d.type !== 'measure') {
+    const hp = d.type === 'hline' || d.type === 'vline' || d.type === 'text' ? [P[0]] : P;
+    hp.forEach(p => { ctx.beginPath(); ctx.arc(p.x, p.y, 5, 0, 7); ctx.fillStyle = '#131722'; ctx.fill(); ctx.strokeStyle = '#2962ff'; ctx.lineWidth = 2; ctx.stroke(); });
+  }
+}
+
+function frame() {
+  const w = wrap.clientWidth, h = wrap.clientHeight, dpr = window.devicePixelRatio || 1;
+  if (cv.width !== Math.round(w * dpr) || cv.height !== Math.round(h * dpr)) { cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr); cv.style.width = w + 'px'; cv.style.height = h + 'px'; }
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, w, h);
+  if (S.bars.length) {
+    const pw = ts.width(), ph = pane0H();
+    ctx.save(); ctx.beginPath(); ctx.rect(0, 0, pw, ph); ctx.clip();
+    S.drawings.forEach(d => render(d, d.id === S.selected, pw, ph));
+    if (S.draft) render(S.draft, false, pw, ph);
+    if (S.measure) render(S.measure, false, pw, ph);
+    ctx.restore();
+  }
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+
+/* ---------------------------------------------------------- hit testing */
+function segDist(m, a, b) {
+  const dx = b.x - a.x, dy = b.y - a.y, l2 = dx * dx + dy * dy;
+  let t = l2 ? ((m.x - a.x) * dx + (m.y - a.y) * dy) / l2 : 0; t = Math.max(0, Math.min(1, t));
+  return Math.hypot(m.x - (a.x + t * dx), m.y - (a.y + t * dy));
+}
+function hitBody(d, P, m) {
+  const pw = ts.width();
+  switch (d.type) {
+    case 'trend': return segDist(m, P[0], P[1]) < 6;
+    case 'ray': return segDist(m, P[0], rayEnd(P[0], P[1], pw)) < 6;
+    case 'hline': return Math.abs(m.y - P[0].y) < 6;
+    case 'vline': return Math.abs(m.x - P[0].x) < 6;
+    case 'rect': case 'fib': {
+      const x1 = Math.min(P[0].x, P[1].x) - 4, x2 = Math.max(P[0].x, P[1].x) + 4, y1 = Math.min(P[0].y, P[1].y) - 4, y2 = Math.max(P[0].y, P[1].y) + 4;
+      return m.x >= x1 && m.x <= x2 && m.y >= y1 && m.y <= y2; }
+    case 'text': { const w = d._w || 60; return m.x >= P[0].x - 3 && m.x <= P[0].x + w + 3 && m.y >= P[0].y - 16 && m.y <= P[0].y + 5; }
+  }
+  return false;
+}
+function hitTest(m) {
+  const sel = S.drawings.find(d => d.id === S.selected);
+  if (sel && !['hline', 'vline', 'text'].includes(sel.type)) {
+    const P = sel.pts.map(px);
+    for (let i = 0; i < P.length; i++) if (P[i].x != null && Math.hypot(m.x - P[i].x, m.y - P[i].y) < 9) return {d: sel, mode: i};
+  }
+  for (let k = S.drawings.length - 1; k >= 0; k--) {
+    const d = S.drawings[k], P = d.pts.map(px); if (P.some(p => p.x == null || p.y == null)) continue;
+    if (hitBody(d, P, m)) return {d, mode: 'body'};
+  }
+  return null;
+}
+
+/* ----------------------------------------------------------- interaction */
+const mpos = e => { const r = wrap.getBoundingClientRect(); return {x: e.clientX - r.left, y: e.clientY - r.top}; };
+const inPlot = m => m.x >= 0 && m.x < ts.width() && m.y >= 0 && m.y < pane0H();
+
+function finalize() {
+  const d = S.draft; S.draft = null; delete d.startPx;
+  if (d.type === 'hline') d.pts = [d.pts[0]];
+  if (d.type === 'measure') S.measure = d;
+  else { pushHist(); S.drawings.push(d); S.selected = d.id; save(); }
+  const keep = d.type === 'measure' ? S.measure : null;
+  setTool('cursor'); S.measure = keep; syncStyleUI();
+}
+
+wrap.addEventListener('mousedown', e => {
+  if (e.button !== 0) return;
+  const m = mpos(e); if (!inPlot(m)) return;
+  if (S.tool !== 'cursor') {
+    e.stopPropagation(); e.preventDefault();
+    const pt = ptFromXY(m.x, m.y, S.magnet); if (!pt) return;
+    if (!S.draft) {
+      if (S.tool === 'text') {
+        const txt = prompt('Text:'); if (txt) { pushHist(); const d = {id: uid(), type: 'text', pts: [pt], color: S.color, width: S.width, text: txt}; S.drawings.push(d); S.selected = d.id; save(); }
+        setTool('cursor'); return;
+      }
+      S.measure = null;
+      S.draft = {id: uid(), type: S.tool, pts: [pt, pt], color: S.color, width: S.width, startPx: m};
+      if (TOOLS[S.tool].n === 1) finalize();
+    } else { S.draft.pts[1] = pt; finalize(); }
+    return;
+  }
+  S.measure = null;
+  const hit = hitTest(m);
+  if (hit) {
+    e.stopPropagation(); e.preventDefault();
+    S.selected = hit.d.id; syncStyleUI(); pushHist();
+    S.drag = {id: hit.d.id, mode: hit.mode, start: m, orig: hit.d.pts.map(px), moved: false};
+  } else { S.selected = null; syncStyleUI(); }
+}, true);
+
+window.addEventListener('mousemove', e => {
+  const m = mpos(e);
+  if (S.draft) { const pt = ptFromXY(m.x, m.y, S.magnet); if (pt) S.draft.pts[1] = pt; }
+  if (S.drag) {
+    const d = S.drawings.find(x => x.id === S.drag.id); if (!d) return;
+    const dx = m.x - S.drag.start.x, dy = m.y - S.drag.start.y; S.drag.moved = true;
+    if (S.drag.mode === 'body') {
+      d.pts = S.drag.orig.map(o => ptFromXY(o.x + dx, o.y + dy, false) || d.pts[0]);
+    } else { const pt = ptFromXY(m.x, m.y, S.magnet); if (pt) d.pts[S.drag.mode] = pt; }
+  }
+});
+window.addEventListener('mouseup', e => {
+  const m = mpos(e);
+  if (S.draft && S.draft.startPx && Math.hypot(m.x - S.draft.startPx.x, m.y - S.draft.startPx.y) > 8 && TOOLS[S.draft.type].n === 2) {
+    const pt = ptFromXY(m.x, m.y, S.magnet); if (pt) { S.draft.pts[1] = pt; finalize(); }
+  }
+  if (S.drag) { if (S.drag.moved) save(); else S.hist.pop(); S.drag = null; }
+});
+window.addEventListener('keydown', e => {
+  if (/INPUT|SELECT|TEXTAREA/.test(e.target.tagName)) return;
+  if ((e.key === 'Delete' || e.key === 'Backspace') && S.selected) { pushHist(); S.drawings = S.drawings.filter(d => d.id !== S.selected); S.selected = null; save(); e.preventDefault(); }
+  else if (e.key === 'Escape') { S.measure = null; S.selected = null; setTool('cursor'); }
+  else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') { undo(); e.preventDefault(); }
+});
+
+/* ------------------------------------------------------------ header UI */
+function syncStyleUI() {
+  const d = S.drawings.find(x => x.id === S.selected);
+  if (d) { $('#col').value = d.color; $('#wid').value = String(d.width || 2); }
+}
+$('#col').addEventListener('input', e => { S.color = e.target.value; const d = S.drawings.find(x => x.id === S.selected); if (d) { d.color = S.color; save(); } });
+$('#wid').addEventListener('change', e => { S.width = +e.target.value; const d = S.drawings.find(x => x.id === S.selected); if (d) { d.width = S.width; save(); } });
+$('#delBtn').addEventListener('click', () => { if (!S.selected) return; pushHist(); S.drawings = S.drawings.filter(d => d.id !== S.selected); S.selected = null; save(); });
+$('#undoBtn').addEventListener('click', undo);
+$('#clearBtn').addEventListener('click', () => { if (S.drawings.length && confirm('Remove all drawings?')) { pushHist(); S.drawings = []; S.selected = null; save(); } });
+
+$$('#tfSeg button').forEach(b => b.addEventListener('click', async () => {
+  S.tf = b.dataset.tf; $$('#tfSeg button').forEach(x => x.classList.toggle('on', x === b)); await loadData(false);
+}));
+$$('#typeSeg button').forEach(b => b.addEventListener('click', () => {
+  S.type = b.dataset.type; $$('#typeSeg button').forEach(x => x.classList.toggle('on', x === b));
+  Object.entries(MAIN).forEach(([k, s]) => s.applyOptions({visible: k === S.type}));
+}));
+$('#logBtn').addEventListener('click', e => {
+  S.log = !S.log; e.currentTarget.classList.toggle('on', S.log);
+  chart.priceScale('right').applyOptions({mode: S.log ? LW.PriceScaleMode.Logarithmic : LW.PriceScaleMode.Normal});
+});
+$('#magBtn').addEventListener('click', e => { S.magnet = !S.magnet; e.currentTarget.classList.toggle('on', S.magnet); });
+$('#shotBtn').addEventListener('click', () => {
+  const c = chart.takeScreenshot(), x = c.getContext('2d'), r = c.width / wrap.clientWidth;
+  x.drawImage(cv, 0, 0, cv.width, cv.height, 0, 0, cv.width * r / (window.devicePixelRatio || 1), cv.height * r / (window.devicePixelRatio || 1));
+  c.toBlob(b => { const a = document.createElement('a'); a.href = URL.createObjectURL(b); a.download = 'ihsg_' + new Date().toISOString().slice(0, 10) + '.png'; a.click(); });
+});
+$('#refBtn').addEventListener('click', async e => {
+  const btn = e.currentTarget; btn.disabled = true; btn.textContent = 'Downloading...';
+  try {
+    const r = await (await fetch('/api/refresh', {method: 'POST'})).json();
+    if (r.ok) { toast(`Updated: ${r.rows} rows fetched from yfinance`); await loadData(true); await loadInfo(); } else toast('Refresh failed: ' + r.error, 8000);
+  } catch (err) { toast('Refresh failed: ' + err, 8000); }
+  btn.disabled = false; btn.textContent = 'Refresh data';
+});
+
+/* ------------------------------------------------------------------ init */
+(async () => {
+  Object.keys(S.ind).forEach(id => { if (OVERLAYS[id] && S.ind[id]) setOverlay(id, true); });
+  await loadDrawings();
+  await loadData(false);
+  await loadInfo();
+})();
+})();
+</script>
+</body>
+</html>
