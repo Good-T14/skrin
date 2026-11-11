@@ -194,5 +194,19 @@ def main():
         pass
 
 
+def _under_streamlit():
+    try:
+        from streamlit.runtime import exists
+        return exists()
+    except Exception:  # noqa: BLE001
+        return False
+
+
 if __name__ == "__main__":
-    main()
+    if _under_streamlit():
+        # Deployed with 'app.py' as the Streamlit main file: run the Streamlit UI instead
+        # of starting the standalone HTTP server.
+        import runpy
+        runpy.run_path(str(HERE / "streamlit_app.py"), run_name="__streamlit_ui__")
+    else:
+        main()
