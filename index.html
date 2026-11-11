@@ -8,8 +8,8 @@
   :root{--bg:#131722;--panel:#1e222d;--line:#2a2e39;--txt:#d1d4dc;--mut:#787b86;--acc:#2962ff;--up:#26a69a;--dn:#ef5350}
   *{box-sizing:border-box}
   html,body{height:100%;margin:0;background:var(--bg);color:var(--txt);font:13px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
-  #app{display:grid;grid-template-rows:46px 1fr;grid-template-columns:48px 1fr;height:100%}
-  header{grid-column:1/3;display:flex;align-items:center;gap:10px;padding:0 10px;background:var(--bg);border-bottom:1px solid var(--line);overflow-x:auto;white-space:nowrap}
+  #app{display:grid;grid-template-rows:auto 1fr;grid-template-columns:48px 1fr;height:100%}
+  header{grid-column:1/3;display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;padding:6px 10px;min-height:46px;background:var(--bg);border-bottom:1px solid var(--line)}
   header .sym b{font-size:15px;margin-right:6px}
   header .sym span{color:var(--mut);font-size:12px}
   header .px{font-weight:600;margin-left:6px}
@@ -29,6 +29,11 @@
   .menu{position:relative;flex:none}
   .dd{display:none;position:fixed;z-index:50;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:6px;min-width:190px;box-shadow:0 8px 24px rgba(0,0,0,.5)}
   .dd.open{display:block}
+  .dd{max-height:75vh;overflow:auto}
+  .dd .grp{color:var(--mut);font-size:11px;text-transform:uppercase;letter-spacing:.05em;padding:4px 8px 2px}
+  .dd .sub{padding:2px 8px 4px 26px;color:var(--mut);display:flex;align-items:center;gap:6px}
+  #symIn{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:5px 8px;color:var(--txt);width:190px;font:inherit}
+  #symIn:focus{outline:1px solid var(--acc)}
   .dd label{display:flex;align-items:center;gap:8px;padding:5px 8px;border-radius:4px;cursor:pointer}
   .dd label:hover{background:#2a2e39}
   .dd i{width:10px;height:10px;border-radius:2px;display:inline-block}
@@ -59,7 +64,9 @@
 <body>
 <div id="app">
   <header>
-    <div class="sym"><b>IHSG</b><span>^JKSE &middot; IDX Composite</span><span class="px" id="px"></span></div>
+    <div class="sym"><b id="symName">IHSG</b><span id="symSub">^JKSE &middot; IDX Composite</span><span class="px" id="px"></span></div>
+    <input id="symIn" list="symList" placeholder="Symbol: IHSG, BBCA, TLKM..." autocomplete="off" spellcheck="false" title="Type any IDX code and press Enter">
+    <datalist id="symList"></datalist>
     <div class="sep"></div>
     <div class="seg" id="tfSeg">
       <button data-tf="D" class="on" title="Daily">D</button>
@@ -121,9 +128,19 @@ const S = {
   bars: [], T: [], byTime: new Map(), avg: 86400,
   tool: 'cursor', drawings: [], selected: null, draft: null, measure: null, drag: null,
   magnet: false, log: false, color: '#2962ff', width: 2,
-  ind: {sma20:false, sma50:true, sma200:true, ema20:false, bb:false, vol:true, rsi:false, macd:false},
+  ind: {sma20:false, sma50:false, sma200:false, ema20:false, bb:false, vol:true, rsi:false, macd:false},
+  vwap: {on: true, per: 'Q', b1: true, b2: true},
+  sym: '^JKSE', label: 'IHSG', name: 'IDX Composite', dec: 2,
   hist: [],
 };
+const INDEX = '^JKSE', PREF_KEY = 'ihsg_prefs_v1';
+if (EMB) { S.sym = window.IHSG_DATA.symbol; S.label = window.IHSG_DATA.label; }
+function loadPrefs() { try { const p = JSON.parse(localStorage.getItem(PREF_KEY) || '{}');
+  if (p.tf) S.tf = p.tf; if (p.type) S.type = p.type;
+  if (p.ind) Object.assign(S.ind, p.ind); if (p.vwap) Object.assign(S.vwap, p.vwap);
+  S.log = !!p.log; S.magnet = !!p.magnet; if (!EMB && p.sym) S.sym = p.sym; } catch (e) {} }
+function savePrefs() { try { localStorage.setItem(PREF_KEY, JSON.stringify({tf: S.tf, type: S.type, ind: S.ind, vwap: S.vwap, log: S.log, magnet: S.magnet, sym: S.sym})); } catch (e) {} }
+loadPrefs();
 
 /* ------------------------------------------------------------------ chart */
 const chartEl = $('#chart'), wrap = $('#wrap');
@@ -220,34 +237,108 @@ function rebuildSubs() {
   try { chart.panes().forEach((p, i) => { if (i > 0) p.setHeight(130); }); } catch (e) {}
 }
 
+/* ------------------------------------------------------------------ VWAP */
+// Anchored VWAP that restarts every period (quarter / year / month / week), with
+// volume-weighted standard-deviation bands (+-1 and +-2 sigma), source = (H+L+C)/3.
+let vwapSeries = [];
+function periodKey(t, per) {
+  const d = new Date(t * 1000), y = d.getUTCFullYear(), m = d.getUTCMonth();
+  if (per === 'Y') return y;
+  if (per === 'Q') return y * 4 + Math.floor(m / 3);
+  if (per === 'M') return y * 12 + m;
+  return Math.floor((t / 86400 + 3) / 7);            // 'W': weeks starting Monday
+}
+function vwapCalc(bars, per) {
+  const hasVol = bars.some(b => b.volume > 0);       // some index feeds carry no volume: weight bars equally
+  const o = {v: [], u1: [], l1: [], u2: [], l2: [], reset: []};
+  let key = null, sv = 0, spv = 0, spv2 = 0;
+  for (const b of bars) {
+    const k = periodKey(b.time, per), first = k !== key;
+    if (first) { key = k; sv = spv = spv2 = 0; }
+    const p = (b.high + b.low + b.close) / 3, w = hasVol ? b.volume : 1;
+    sv += w; spv += w * p; spv2 += w * p * p;
+    if (sv > 0) {
+      const v = spv / sv, sd = Math.sqrt(Math.max(0, spv2 / sv - v * v));
+      o.v.push(v); o.u1.push(v + sd); o.l1.push(v - sd); o.u2.push(v + 2 * sd); o.l2.push(v - 2 * sd);
+    } else { ['v', 'u1', 'l1', 'u2', 'l2'].forEach(n => o[n].push(null)); }
+    o.reset.push(first);
+  }
+  return o;
+}
+function gapData(arr, reset) {                        // blank the first bar of each period so lines do not join across resets
+  const o = [];
+  for (let i = 0; i < arr.length; i++) {
+    if (i > 0 && reset[i]) { o.push({time: S.T[i]}); continue; }
+    if (arr[i] != null) o.push({time: S.T[i], value: arr[i]});
+  }
+  return o;
+}
+function rebuildVwap() {
+  vwapSeries.forEach(s => { try { chart.removeSeries(s); } catch (e) {} });
+  vwapSeries = [];
+  if (!S.vwap.on || !S.bars.length) return;
+  const r = vwapCalc(S.bars, S.vwap.per);
+  const mk = (arr, color, w, style) => {
+    const s = chart.addSeries(LW.LineSeries, {color, lineWidth: w, lineStyle: style, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false});
+    s.setData(gapData(arr, r.reset)); vwapSeries.push(s);
+  };
+  if (S.vwap.b2) { mk(r.u2, '#42a5f5', 1, 2); mk(r.l2, '#42a5f5', 1, 2); }
+  if (S.vwap.b1) { mk(r.u1, '#43a047', 1, 0); mk(r.l1, '#43a047', 1, 0); }
+  mk(r.v, '#ff9800', 2, 0);
+}
+const VW_NAMES = {Q: 'Quarterly', Y: 'Yearly', M: 'Monthly', W: 'Weekly'};
+
 /* indicators dropdown */
 (function buildDropdown() {
   const rows = [
     ...Object.entries(OVERLAYS).map(([id, o]) => [id, o.label, o.colors[0]]),
     ['vol', 'Volume', '#78909c'], ['rsi', 'RSI (14)', '#b388ff'], ['macd', 'MACD (12, 26, 9)', '#2196f3'],
   ];
-  $('#indDd').innerHTML = rows.map(([id, label, col]) =>
-    `<label><input type="checkbox" data-ind="${id}" ${S.ind[id] ? 'checked' : ''}><i style="background:${col}"></i>${label}</label>`).join('');
-  $$('#indDd input').forEach(cb => cb.addEventListener('change', () => {
+  const opt = Object.entries(VW_NAMES).map(([v, l]) => `<option value="${v}" ${S.vwap.per === v ? 'selected' : ''}>${l}</option>`).join('');
+  $('#indDd').innerHTML =
+    `<div class="grp">VWAP</div>` +
+    `<label><input type="checkbox" id="vwOn" ${S.vwap.on ? 'checked' : ''}><i style="background:#ff9800"></i>VWAP</label>` +
+    `<div class="sub">Anchor / reset <select id="vwPer">${opt}</select></div>` +
+    `<label><input type="checkbox" id="vwB1" ${S.vwap.b1 ? 'checked' : ''}><i style="background:#43a047"></i>Band 1 (\u00b11\u03c3)</label>` +
+    `<label><input type="checkbox" id="vwB2" ${S.vwap.b2 ? 'checked' : ''}><i style="background:#42a5f5"></i>Band 2 (\u00b12\u03c3)</label>` +
+    `<hr><div class="grp">Indicators</div>` +
+    rows.map(([id, label, col]) =>
+      `<label><input type="checkbox" data-ind="${id}" ${S.ind[id] ? 'checked' : ''}><i style="background:${col}"></i>${label}</label>`).join('');
+  const vw = () => { S.vwap.on = $('#vwOn').checked; S.vwap.per = $('#vwPer').value; S.vwap.b1 = $('#vwB1').checked; S.vwap.b2 = $('#vwB2').checked;
+    rebuildVwap(); updateLegend(); savePrefs(); };
+  ['#vwOn', '#vwPer', '#vwB1', '#vwB2'].forEach(s => $(s).addEventListener('change', vw));
+  $$('#indDd input[data-ind]').forEach(cb => cb.addEventListener('change', () => {
     const id = cb.dataset.ind; S.ind[id] = cb.checked;
     if (OVERLAYS[id]) setOverlay(id, cb.checked);
     else if (id === 'vol') sVol.applyOptions({visible: cb.checked});
     else rebuildSubs();
-    updateLegend();
+    updateLegend(); savePrefs();
   }));
   $('#indBtn').addEventListener('click', e => {
     const dd = $('#indDd'), r = e.currentTarget.getBoundingClientRect();
     dd.style.left = r.left + 'px'; dd.style.top = (r.bottom + 4) + 'px'; dd.classList.toggle('open');
     e.stopPropagation();
   });
-  document.addEventListener('click', e => { if (!e.target.closest('#indDd')) $('#indDd').classList.remove('open'); });
+  document.addEventListener('click', e => { if (!e.target.closest('#indDd') && !e.target.closest('#indBtn')) $('#indDd').classList.remove('open'); });
 })();
 
 /* ------------------------------------------------------------------- data */
 function toast(msg, ms = 4000) { const t = $('#toast'); t.textContent = msg; t.style.display = 'block'; clearTimeout(toast.h); toast.h = setTimeout(() => t.style.display = 'none', ms); }
 
 async function loadData(keepView) {
-  const j = EMB ? {bars: window.IHSG_DATA.bars[S.tf]} : await (await fetch('/api/prices?tf=' + S.tf)).json();
+  let j;
+  if (EMB) { const D = window.IHSG_DATA; j = {bars: D.bars[S.tf], label: D.label, name: D.name}; }
+  else {
+    try { j = await (await fetch('/api/prices?tf=' + S.tf + '&sym=' + encodeURIComponent(S.sym))).json(); } catch (e) { j = {error: String(e)}; }
+    if (j.error) { toast('Could not load ' + S.sym + ': ' + j.error, 8000); return false; }
+  }
+  S.label = j.label || S.label; S.name = j.name || '';
+  S.dec = S.sym === INDEX ? 2 : 0;                     // index: 2 decimals, stocks: whole rupiah
+  const pf = S.dec ? {type: 'price', precision: 2, minMove: 0.01} : {type: 'price', precision: 0, minMove: 1};
+  [sCandle, sBar, sLine, sArea].forEach(s => s.applyOptions({priceFormat: pf}));
+  $('#symName').textContent = S.label;
+  $('#symSub').textContent = S.sym === INDEX ? '^JKSE \u00b7 IDX Composite' : (S.name || S.sym);
+  document.title = S.label + ' - Chart';
   S.bars = j.bars || [];
   S.T = S.bars.map(b => b.time);
   S.byTime = new Map(S.bars.map((b, i) => [b.time, i]));
@@ -260,17 +351,19 @@ async function loadData(keepView) {
   sLine.setData(lp); sArea.setData(lp);
   sVol.setData(S.bars.map(b => ({time: b.time, value: b.volume, color: b.close >= b.open ? 'rgba(38,166,154,.45)' : 'rgba(239,83,80,.45)'})));
   Object.keys(live).forEach(refreshOverlay);
+  rebuildVwap();
   rebuildSubs();
   if (n) { const l = S.bars[n - 1], p = S.bars[n - 2] || l, ch = l.close - p.close;
     $('#px').innerHTML = `<span style="color:${ch >= 0 ? UP : DN}">${fmt(l.close)}&nbsp; ${ch >= 0 ? '+' : ''}${fmt(ch)} (${(ch / p.close * 100).toFixed(2)}%)</span>`; }
   if (!keepView) showRange(S.tf === 'D' ? 245 : S.tf === 'W' ? 245 * 2 : 0);
   updateLegend();
+  return true;
 }
 async function loadInfo() {
-  const i = EMB ? window.IHSG_DATA.info : await (await fetch('/api/info')).json();
+  const i = EMB ? window.IHSG_DATA.info : await (await fetch('/api/info?sym=' + encodeURIComponent(S.sym))).json();
   $('#info').textContent = i.rows ? `${i.rows.toLocaleString()} rows \u00b7 ${i.first} \u2192 ${i.last}${i.demo ? ' \u00b7 DEMO DATA' : ''}` : '';
 }
-const fmt = v => v == null ? '' : v.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+const fmt = v => v == null ? '' : v.toLocaleString('en-US', {minimumFractionDigits: S.dec, maximumFractionDigits: S.dec});
 
 function showRange(daysBars) {
   const n = S.T.length; if (!n) return;
@@ -287,9 +380,10 @@ function updateLegend(t) {
   const i = t != null && S.byTime.has(t) ? S.byTime.get(t) : n - 1, b = S.bars[i], p = S.bars[i - 1] || b;
   const ch = b.close - p.close, col = ch >= 0 ? UP : DN;
   const d = new Date(b.time * 1000).toISOString().slice(0, 10);
-  const inds = Object.keys(OVERLAYS).filter(id => S.ind[id]).map(id => `<span style="color:${OVERLAYS[id].colors[0]}">${OVERLAYS[id].label}</span>`).join(' &nbsp; ');
+  const vw = S.vwap.on ? `<span style="color:#ff9800">VWAP ${VW_NAMES[S.vwap.per]}${S.vwap.b1 ? ' \u00b11\u03c3' : ''}${S.vwap.b2 ? ' \u00b12\u03c3' : ''}</span>` : '';
+  const inds = [vw, ...Object.keys(OVERLAYS).filter(id => S.ind[id]).map(id => `<span style="color:${OVERLAYS[id].colors[0]}">${OVERLAYS[id].label}</span>`)].filter(Boolean).join(' &nbsp; ');
   $('#legend').innerHTML =
-    `<div class="t">IHSG &middot; ${S.tf} <span style="color:var(--mut);font-weight:400">${d}</span></div>` +
+    `<div class="t">${S.label} &middot; ${S.tf} <span style="color:var(--mut);font-weight:400">${d}</span></div>` +
     `<div class="v" style="color:${col}">O<b>${fmt(b.open)}</b>H<b>${fmt(b.high)}</b>L<b>${fmt(b.low)}</b>C<b>${fmt(b.close)}</b>` +
     `${ch >= 0 ? '+' : ''}${fmt(ch)} (${(ch / p.close * 100).toFixed(2)}%) <span style="color:var(--mut)">&nbsp;Vol ${b.volume.toLocaleString()}</span></div>` +
     (inds ? `<div class="ind">${inds}</div>` : '');
@@ -369,11 +463,14 @@ setTool('cursor');
 const uid = () => Math.random().toString(36).slice(2, 9);
 const clean = () => JSON.stringify(S.drawings.map(({_w, ...r}) => r));
 function pushHist() { S.hist.push(clean()); if (S.hist.length > 50) S.hist.shift(); }
-function save() { clearTimeout(save.h); save.h = setTimeout(() => {
-  if (EMB) { try { localStorage.setItem(LSKEY, clean()); } catch (e) {} return; }
-  fetch('/api/drawings', {method: 'PUT', headers: {'Content-Type': 'application/json'}, body: clean()}).catch(() => {}); }, 300); }
+const lsk = () => S.sym === INDEX ? LSKEY : LSKEY + ':' + S.sym;
+function saveNow() {
+  if (EMB) { try { localStorage.setItem(lsk(), clean()); } catch (e) {} return; }
+  fetch('/api/drawings?sym=' + encodeURIComponent(S.sym), {method: 'PUT', headers: {'Content-Type': 'application/json'}, body: clean()}).catch(() => {});
+}
+function save() { clearTimeout(save.h); save.h = setTimeout(() => { save.h = null; saveNow(); }, 300); }
 function undo() { const s = S.hist.pop(); if (s == null) return; S.drawings = JSON.parse(s); S.selected = null; save(); }
-async function loadDrawings() { try { S.drawings = EMB ? JSON.parse(localStorage.getItem(LSKEY) || '[]') : await (await fetch('/api/drawings')).json(); } catch (e) { S.drawings = []; } }
+async function loadDrawings() { try { S.drawings = EMB ? JSON.parse(localStorage.getItem(lsk()) || '[]') : await (await fetch('/api/drawings?sym=' + encodeURIComponent(S.sym))).json(); } catch (e) { S.drawings = []; } }
 
 /* ------------------------------------------------------------ rendering */
 const cv = $('#ov'), ctx = cv.getContext('2d');
@@ -556,38 +653,92 @@ $('#undoBtn').addEventListener('click', undo);
 $('#clearBtn').addEventListener('click', () => { if (S.drawings.length && confirm('Remove all drawings?')) { pushHist(); S.drawings = []; S.selected = null; save(); } });
 
 $$('#tfSeg button').forEach(b => b.addEventListener('click', async () => {
-  S.tf = b.dataset.tf; $$('#tfSeg button').forEach(x => x.classList.toggle('on', x === b)); await loadData(false);
+  S.tf = b.dataset.tf; $$('#tfSeg button').forEach(x => x.classList.toggle('on', x === b)); savePrefs(); await loadData(false);
 }));
 $$('#typeSeg button').forEach(b => b.addEventListener('click', () => {
   S.type = b.dataset.type; $$('#typeSeg button').forEach(x => x.classList.toggle('on', x === b));
-  Object.entries(MAIN).forEach(([k, s]) => s.applyOptions({visible: k === S.type}));
+  Object.entries(MAIN).forEach(([k, s]) => s.applyOptions({visible: k === S.type})); savePrefs();
 }));
 $('#logBtn').addEventListener('click', e => {
   S.log = !S.log; e.currentTarget.classList.toggle('on', S.log);
-  chart.priceScale('right').applyOptions({mode: S.log ? LW.PriceScaleMode.Logarithmic : LW.PriceScaleMode.Normal});
+  chart.priceScale('right').applyOptions({mode: S.log ? LW.PriceScaleMode.Logarithmic : LW.PriceScaleMode.Normal}); savePrefs();
 });
-$('#magBtn').addEventListener('click', e => { S.magnet = !S.magnet; e.currentTarget.classList.toggle('on', S.magnet); });
+$('#magBtn').addEventListener('click', e => { S.magnet = !S.magnet; e.currentTarget.classList.toggle('on', S.magnet); savePrefs(); });
 $('#shotBtn').addEventListener('click', () => {
   const c = chart.takeScreenshot(), x = c.getContext('2d'), r = c.width / wrap.clientWidth;
   x.drawImage(cv, 0, 0, cv.width, cv.height, 0, 0, cv.width * r / (window.devicePixelRatio || 1), cv.height * r / (window.devicePixelRatio || 1));
-  c.toBlob(b => { const a = document.createElement('a'); a.href = URL.createObjectURL(b); a.download = 'ihsg_' + new Date().toISOString().slice(0, 10) + '.png'; a.click(); });
+  c.toBlob(b => { const a = document.createElement('a'); a.href = URL.createObjectURL(b); a.download = S.label.toLowerCase() + '_' + new Date().toISOString().slice(0, 10) + '.png'; a.click(); });
 });
 $('#refBtn').addEventListener('click', async e => {
   const btn = e.currentTarget; btn.disabled = true; btn.textContent = 'Downloading...';
   try {
-    const r = await (await fetch('/api/refresh', {method: 'POST'})).json();
+    const r = await (await fetch('/api/refresh?sym=' + encodeURIComponent(S.sym), {method: 'POST'})).json();
     if (r.ok) { toast(`Updated: ${r.rows} rows fetched from yfinance`); await loadData(true); await loadInfo(); } else toast('Refresh failed: ' + r.error, 8000);
   } catch (err) { toast('Refresh failed: ' + err, 8000); }
   btn.disabled = false; btn.textContent = 'Refresh data';
 });
 
 /* ------------------------------------------------------------------ init */
+function applyPrefsUI() {
+  $$('#tfSeg button').forEach(x => x.classList.toggle('on', x.dataset.tf === S.tf));
+  $$('#typeSeg button').forEach(x => x.classList.toggle('on', x.dataset.type === S.type));
+  Object.entries(MAIN).forEach(([k, s]) => s.applyOptions({visible: k === S.type}));
+  $('#logBtn').classList.toggle('on', S.log); $('#magBtn').classList.toggle('on', S.magnet);
+  if (S.log) chart.priceScale('right').applyOptions({mode: LW.PriceScaleMode.Logarithmic});
+  sVol.applyOptions({visible: !!S.ind.vol});
+}
+
+/* symbol search (standalone server only; in Streamlit the symbol is chosen in the sidebar) */
+function normSym(v) {
+  v = (v || '').trim().toUpperCase();
+  if (!v || v === 'IHSG' || v === 'JKSE' || v === '^JKSE') return INDEX;
+  return v.includes('.') || v.startsWith('^') ? v : v + '.JK';
+}
+async function switchSymbol(v) {
+  const sym = normSym(v); if (sym === S.sym) { $('#symIn').value = S.label; return; }
+  if (save.h) { clearTimeout(save.h); save.h = null; saveNow(); }        // flush drawings of the old symbol first
+  const prev = S.sym; S.sym = sym; S.selected = null; S.draft = null; S.measure = null; S.hist = [];
+  toast('Loading ' + sym + '...', 60000);
+  if (!(await loadData(false))) { S.sym = prev; await loadData(false); $('#symIn').value = S.label; return; }
+  $('#toast').style.display = 'none';
+  await loadDrawings(); await loadInfo(); $('#symIn').value = S.label; savePrefs();
+}
+async function initSymbols() {
+  if (EMB) { $('#symIn').style.display = 'none'; return; }
+  try {
+    const list = await (await fetch('/api/symbols')).json();
+    $('#symList').innerHTML = list.map(x => `<option value="${x.label}">${String(x.name || '').replace(/</g, '&lt;')}</option>`).join('');
+  } catch (e) {}
+  $('#symIn').value = S.label;
+  $('#symIn').addEventListener('change', e => switchSymbol(e.target.value));
+  $('#symIn').addEventListener('focus', e => e.target.select());
+}
+
+/* inside Streamlit: stretch the iframe to the visible window so nothing is cut off */
+function fitFrame() {
+  if (!EMB) return;
+  try {
+    const f = window.frameElement; if (!f) return;
+    const P = window.parent, main = P.document.querySelector('[data-testid="stMain"]');
+    const r = f.getBoundingClientRect();
+    let h;
+    if (main) { const mr = main.getBoundingClientRect(); h = main.clientHeight - (r.top - mr.top + main.scrollTop) - 8; }
+    else h = P.innerHeight - r.top - 8;
+    h = Math.max(460, Math.floor(h));
+    const old = f.offsetHeight, els = [f]; let e = f.parentElement;
+    for (let i = 0; i < 3 && e; i++) { if (Math.abs(e.offsetHeight - old) <= 8) els.push(e); else break; e = e.parentElement; }
+    els.forEach(x => x.style.setProperty('height', h + 'px', 'important'));
+  } catch (err) {}
+}
+
 (async () => {
-  if (EMB) $('#refBtn').style.display = 'none';   // refresh lives in the Streamlit sidebar
+  if (EMB) { $('#refBtn').style.display = 'none'; fitFrame(); [150, 600, 1500, 3500].forEach(t => setTimeout(fitFrame, t)); try { window.parent.addEventListener('resize', fitFrame); } catch (e) {} }
+  applyPrefsUI();
   Object.keys(S.ind).forEach(id => { if (OVERLAYS[id] && S.ind[id]) setOverlay(id, true); });
   await loadDrawings();
-  await loadData(false);
+  if (!(await loadData(false))) { S.sym = INDEX; await loadDrawings(); await loadData(false); }
   await loadInfo();
+  await initSymbols();
 })();
 })();
 </script>

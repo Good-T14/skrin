@@ -1,110 +1,34 @@
 #!/usr/bin/env python3
 """
-IHSG interactive chart server (TradingView-style UI with drawing tools).
+IHSG + all IDX stocks - standalone chart server (TradingView-style UI).
 
     pip install yfinance pandas matplotlib
     python app.py                 # opens http://127.0.0.1:8000
     python app.py --demo          # synthetic data, no internet needed
-    python app.py --db ../ihsg.db # reuse the database made by ihsg_db.py
 
-Put this folder next to ihsg_db.py (or keep it as-is: a copy is included here).
-Only the Python standard library + pandas (+ yfinance for refreshing) are needed.
+If this file is used as the *Streamlit* main file it hands over to streamlit_app.py,
+so both `python app.py` and `streamlit run app.py` work.
 """
 import argparse
 import json
-import sqlite3
 import sys
+import threading
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-import pandas as pd
-
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
-sys.path.insert(0, str(HERE.parent))
-import ihsg_db as core  # noqa: E402
+import data  # noqa: E402
 
-CFG = {"db": "ihsg.db", "start": "1997-07-01", "demo": False}
-EPOCH = pd.Timestamp("1970-01-01")
+CFG = {"db": "ihsg.db", "demo": False}
 
 
-def get_prices(tf):
-    conn = core.connect(CFG["db"])
-    try:
-        df = core.load(conn)
-    finally:
-        conn.close()
-    if df.empty:
-        return []
-    rule = {"D": None, "W": "W-FRI", "M": "MS"}.get(tf)
-    if rule:
-        df = df.resample(rule).agg(
-            {"open": "first", "high": "max", "low": "min", "close": "last", "volume": "sum"}
-        )
-    df = df.dropna(subset=["open", "high", "low", "close"])
-    secs = ((df.index - EPOCH) // pd.Timedelta(seconds=1)).tolist()
-    vol = df["volume"].fillna(0).tolist()
-    return [
-        {
-            "time": int(t),
-            "open": round(float(o), 2),
-            "high": round(float(h), 2),
-            "low": round(float(l), 2),
-            "close": round(float(c), 2),
-            "volume": int(v),
-        }
-        for t, o, h, l, c, v in zip(
-            secs, df["open"], df["high"], df["low"], df["close"], vol
-        )
-    ]
-
-
-def get_info():
-    conn = core.connect(CFG["db"])
-    try:
-        n, a, b = conn.execute("SELECT COUNT(*), MIN(date), MAX(date) FROM prices").fetchone()
-        row = conn.execute("SELECT value FROM meta WHERE key='last_update'").fetchone()
-    finally:
-        conn.close()
-    return {"rows": n, "first": a, "last": b, "updated": row[0] if row else None,
-            "demo": CFG["demo"]}
-
-
-def do_refresh():
-    conn = core.connect(CFG["db"])
-    try:
-        last = core.last_date(conn)
-        start = (
-            (pd.Timestamp(last) - pd.Timedelta(days=7)).strftime("%Y-%m-%d")
-            if last else CFG["start"]
-        )
-        df = core.fake_data() if CFG["demo"] else core.fetch_yfinance(start)
-        if df is None or df.empty:
-            raise RuntimeError("yfinance returned no data (check internet / try: pip install -U yfinance)")
-        n = core.upsert(conn, df)
-    finally:
-        conn.close()
-    return n
-
-
-def get_drawings():
-    conn = core.connect(CFG["db"])
-    try:
-        row = conn.execute("SELECT value FROM meta WHERE key='drawings'").fetchone()
-    finally:
-        conn.close()
-    return json.loads(row[0]) if row else []
-
-
-def put_drawings(items):
-    conn = core.connect(CFG["db"])
-    try:
-        conn.execute("INSERT OR REPLACE INTO meta VALUES ('drawings', ?)", (json.dumps(items),))
-        conn.commit()
-    finally:
-        conn.close()
+def symbols():
+    out = [{"symbol": data.INDEX_SYM, "label": "IHSG", "name": "IDX Composite"}]
+    out += [{"symbol": s, "label": data.label(s), "name": n} for s, n in data.universe(CFG["db"])]
+    return out
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -123,40 +47,62 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _sym(self, q):
+        return data.norm(q.get("sym", [""])[0])
+
     def do_GET(self):
         u = urlparse(self.path)
+        q = parse_qs(u.query)
+        db, demo = CFG["db"], CFG["demo"]
         try:
             if u.path in ("/", "/index.html"):
                 self._send(200, (HERE / "index.html").read_bytes(), "text/html; charset=utf-8")
             elif u.path == "/lightweight-charts.js":
-                self._send(200, (HERE / "lightweight-charts.js").read_bytes(),
-                           "application/javascript")
+                self._send(200, (HERE / "lightweight-charts.js").read_bytes(), "application/javascript")
+            elif u.path == "/api/symbols":
+                self._send(200, symbols())
             elif u.path == "/api/prices":
-                tf = parse_qs(u.query).get("tf", ["D"])[0]
-                self._send(200, {"bars": get_prices(tf)})
+                sym, tf = self._sym(q), q.get("tf", ["D"])[0]
+                try:
+                    data.update_symbol(db, sym, demo)          # throttled to once an hour
+                except Exception as e:  # noqa: BLE001
+                    if not data.get_info(db, sym)["rows"]:
+                        self._send(500, {"error": str(e)})
+                        return
+                names = dict(data.universe(db))
+                self._send(200, {"bars": data.get_prices(db, sym, tf),
+                                 "symbol": sym, "label": data.label(sym),
+                                 "name": "IDX Composite" if sym == data.INDEX_SYM else names.get(sym, "")})
             elif u.path == "/api/info":
-                self._send(200, get_info())
+                self._send(200, data.get_info(db, self._sym(q), demo))
             elif u.path == "/api/drawings":
-                self._send(200, get_drawings())
+                self._send(200, data.get_drawings(db, self._sym(q)))
             else:
                 self._send(404, {"error": "not found"})
         except Exception as e:  # noqa: BLE001
             self._send(500, {"error": str(e)})
 
     def do_POST(self):
-        if urlparse(self.path).path == "/api/refresh":
-            try:
-                self._send(200, {"ok": True, "rows": do_refresh()})
-            except Exception as e:  # noqa: BLE001
-                self._send(500, {"ok": False, "error": str(e)})
-        else:
-            self._send(404, {"error": "not found"})
+        u = urlparse(self.path)
+        q = parse_qs(u.query)
+        try:
+            if u.path == "/api/refresh":
+                n = data.update_symbol(CFG["db"], self._sym(q), CFG["demo"], force=True)
+                self._send(200, {"ok": True, "rows": n})
+            elif u.path == "/api/universe":
+                n = data.refresh_universe(CFG["db"])
+                self._send(200, {"ok": True, "count": n})
+            else:
+                self._send(404, {"error": "not found"})
+        except Exception as e:  # noqa: BLE001
+            self._send(500, {"ok": False, "error": str(e)})
 
     def do_PUT(self):
-        if urlparse(self.path).path == "/api/drawings":
+        u = urlparse(self.path)
+        if u.path == "/api/drawings":
             try:
                 n = int(self.headers.get("Content-Length", 0))
-                put_drawings(json.loads(self.rfile.read(n) or b"[]"))
+                data.put_drawings(CFG["db"], self._sym(parse_qs(u.query)), json.loads(self.rfile.read(n) or b"[]"))
                 self._send(200, {"ok": True})
             except Exception as e:  # noqa: BLE001
                 self._send(500, {"ok": False, "error": str(e)})
@@ -168,20 +114,21 @@ def main():
     p = argparse.ArgumentParser()
     p.add_argument("--db", default="ihsg.db")
     p.add_argument("--port", type=int, default=8000)
-    p.add_argument("--start", default="1997-07-01")
     p.add_argument("--demo", action="store_true", help="synthetic data (offline test)")
     p.add_argument("--no-browser", action="store_true")
     a = p.parse_args()
-    CFG.update(db=a.db, start=a.start, demo=a.demo)
+    CFG.update(db=a.db, demo=a.demo)
 
-    conn = core.connect(a.db)
-    empty = conn.execute("SELECT COUNT(*) FROM prices").fetchone()[0] == 0
-    conn.close()
-    if empty and a.demo:
-        do_refresh()
-        print("Seeded demo data.")
-    elif empty:
-        print("Database is empty - click 'Refresh data' in the page to download from yfinance.")
+    if len(data.universe(a.db)) == 0:
+        data.load_fallback(a.db)
+    if not a.demo and len(data.universe(a.db)) < data.FULL_UNIVERSE_MIN:
+        def _bg():
+            try:
+                n = data.refresh_universe(a.db)
+                print(f"Stock list updated from Yahoo: {n} stocks.")
+            except Exception as e:  # noqa: BLE001
+                print(f"Could not fetch the full stock list ({e}); using the starter list.")
+        threading.Thread(target=_bg, daemon=True).start()
 
     url = f"http://127.0.0.1:{a.port}"
     srv = ThreadingHTTPServer(("127.0.0.1", a.port), Handler)
@@ -204,8 +151,6 @@ def _under_streamlit():
 
 if __name__ == "__main__":
     if _under_streamlit():
-        # Deployed with 'app.py' as the Streamlit main file: run the Streamlit UI instead
-        # of starting the standalone HTTP server.
         import runpy
         runpy.run_path(str(HERE / "streamlit_app.py"), run_name="__streamlit_ui__")
     else:

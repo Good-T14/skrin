@@ -75,9 +75,9 @@ def load(conn):
 
 
 # ---------- data ----------
-def fetch_yfinance(start):
+def fetch_yfinance(start, symbol=TICKER):
     import yfinance as yf
-    raw = yf.Ticker(TICKER).history(start=start, auto_adjust=False)
+    raw = yf.Ticker(symbol).history(start=start, auto_adjust=False)
     if raw.empty:
         return raw
     raw.index = pd.to_datetime(raw.index).tz_localize(None).normalize()
@@ -88,10 +88,10 @@ def fetch_yfinance(start):
     return df
 
 
-def fake_data(start="2015-01-01"):
-    rng = np.random.default_rng(1)
+def fake_data(start="2015-01-01", seed=1, base=4500):
+    rng = np.random.default_rng(seed)
     idx = pd.bdate_range(start, pd.Timestamp.today().normalize())
-    close = 4500 * np.exp(np.cumsum(rng.normal(0.0003, 0.01, len(idx))))
+    close = base * np.exp(np.cumsum(rng.normal(0.0003, 0.01, len(idx))))
     df = pd.DataFrame(index=idx)
     df["Close"] = close
     df["AdjClose"] = close
