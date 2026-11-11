@@ -110,6 +110,8 @@
 (() => {
 'use strict';
 const LW = LightweightCharts;
+const EMB = !!window.IHSG_DATA;           // embedded in Streamlit: data inline, drawings in localStorage
+const LSKEY = 'ihsg_drawings_v1';
 const $ = s => document.querySelector(s);
 const $$ = s => [...document.querySelectorAll(s)];
 
@@ -245,7 +247,7 @@ function rebuildSubs() {
 function toast(msg, ms = 4000) { const t = $('#toast'); t.textContent = msg; t.style.display = 'block'; clearTimeout(toast.h); toast.h = setTimeout(() => t.style.display = 'none', ms); }
 
 async function loadData(keepView) {
-  const j = await (await fetch('/api/prices?tf=' + S.tf)).json();
+  const j = EMB ? {bars: window.IHSG_DATA.bars[S.tf]} : await (await fetch('/api/prices?tf=' + S.tf)).json();
   S.bars = j.bars || [];
   S.T = S.bars.map(b => b.time);
   S.byTime = new Map(S.bars.map((b, i) => [b.time, i]));
@@ -265,7 +267,7 @@ async function loadData(keepView) {
   updateLegend();
 }
 async function loadInfo() {
-  const i = await (await fetch('/api/info')).json();
+  const i = EMB ? window.IHSG_DATA.info : await (await fetch('/api/info')).json();
   $('#info').textContent = i.rows ? `${i.rows.toLocaleString()} rows \u00b7 ${i.first} \u2192 ${i.last}${i.demo ? ' \u00b7 DEMO DATA' : ''}` : '';
 }
 const fmt = v => v == null ? '' : v.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
@@ -367,9 +369,11 @@ setTool('cursor');
 const uid = () => Math.random().toString(36).slice(2, 9);
 const clean = () => JSON.stringify(S.drawings.map(({_w, ...r}) => r));
 function pushHist() { S.hist.push(clean()); if (S.hist.length > 50) S.hist.shift(); }
-function save() { clearTimeout(save.h); save.h = setTimeout(() => fetch('/api/drawings', {method: 'PUT', headers: {'Content-Type': 'application/json'}, body: clean()}).catch(() => {}), 300); }
+function save() { clearTimeout(save.h); save.h = setTimeout(() => {
+  if (EMB) { try { localStorage.setItem(LSKEY, clean()); } catch (e) {} return; }
+  fetch('/api/drawings', {method: 'PUT', headers: {'Content-Type': 'application/json'}, body: clean()}).catch(() => {}); }, 300); }
 function undo() { const s = S.hist.pop(); if (s == null) return; S.drawings = JSON.parse(s); S.selected = null; save(); }
-async function loadDrawings() { try { S.drawings = await (await fetch('/api/drawings')).json(); } catch (e) { S.drawings = []; } }
+async function loadDrawings() { try { S.drawings = EMB ? JSON.parse(localStorage.getItem(LSKEY) || '[]') : await (await fetch('/api/drawings')).json(); } catch (e) { S.drawings = []; } }
 
 /* ------------------------------------------------------------ rendering */
 const cv = $('#ov'), ctx = cv.getContext('2d');
@@ -579,6 +583,7 @@ $('#refBtn').addEventListener('click', async e => {
 
 /* ------------------------------------------------------------------ init */
 (async () => {
+  if (EMB) $('#refBtn').style.display = 'none';   // refresh lives in the Streamlit sidebar
   Object.keys(S.ind).forEach(id => { if (OVERLAYS[id] && S.ind[id]) setOverlay(id, true); });
   await loadDrawings();
   await loadData(false);
