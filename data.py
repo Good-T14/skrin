@@ -59,10 +59,11 @@ def _last_date(conn, sym):
     return conn.execute("SELECT MAX(date) FROM stock_prices WHERE symbol=?", (sym,)).fetchone()[0]
 
 
-def _fake(sym, start):
+def _fake(sym, start=None):
     seed = zlib.crc32(sym.encode())
     base = 4500 if sym == INDEX_SYM else 300 + seed % 6000
-    return core.fake_data(start if start else "2015-01-01", seed=seed, base=base)
+    df = core.fake_data("2015-01-01", seed=seed, base=base)
+    return df[df.index >= pd.Timestamp(start)] if start else df
 
 
 def _upsert(conn, sym, df):
@@ -79,29 +80,46 @@ def _upsert(conn, sym, df):
 
 def update_symbol(db, sym, demo=False, force=False, max_age=3600):
     """Download new bars for `sym` from yfinance. Returns rows fetched (0 = skipped).
-    Raises if there is nothing at all for the symbol."""
+    Raises if there is nothing at all for the symbol.
+    A stock first loaded by the screener's bulk scan only has ~2 years of history; opening it
+    in the chart downloads the full history once (tracked with the `full:<sym>` flag)."""
     sym = norm(sym)
     conn = connect(db)
     try:
-        key = f"fetched:{sym}"
+        key, fkey = f"fetched:{sym}", f"full:{sym}"
         row = conn.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
+        full = sym == INDEX_SYM or conn.execute("SELECT 1 FROM meta WHERE key=?", (fkey,)).fetchone() is not None
         now = time.time()
-        if row and not force and now - float(row[0]) < max_age:
+        if row and full and not force and now - float(row[0]) < max_age:
             return 0
         last = _last_date(conn, sym)
-        if last:
+        if last and full:
             start = (pd.Timestamp(last) - pd.Timedelta(days=7)).strftime("%Y-%m-%d")
         else:
             start = "1997-07-01" if sym == INDEX_SYM else "1990-01-01"
-        df = _fake(sym, start if last else None) if demo else core.fetch_yfinance(start, sym)
+        df = _fake(sym, start) if demo else core.fetch_yfinance(start, sym)
         if df is None or df.empty:
             if last:
                 return 0
             raise RuntimeError(f"No data returned for {sym} (wrong code, or yfinance unavailable)")
         n = _upsert(conn, sym, df)
         conn.execute("INSERT OR REPLACE INTO meta VALUES (?,?)", (key, str(now)))
+        if not full:
+            conn.execute("INSERT OR REPLACE INTO meta VALUES (?,?)", (fkey, "1"))
         conn.commit()
         return n
+    finally:
+        conn.close()
+
+
+def has_full(db, sym):
+    """True once the complete history of `sym` is stored (bulk screener scans keep only ~2 years)."""
+    sym = norm(sym)
+    if sym == INDEX_SYM:
+        return True
+    conn = connect(db)
+    try:
+        return conn.execute("SELECT 1 FROM meta WHERE key=?", (f"full:{sym}",)).fetchone() is not None
     finally:
         conn.close()
 

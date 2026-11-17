@@ -56,6 +56,11 @@
   #ranges button{background:rgba(30,34,45,.85);border:0;color:var(--mut);padding:3px 8px;border-radius:4px;cursor:pointer;font-size:12px}
   #ranges button:hover{color:#fff;background:var(--acc)}
   #hint{position:absolute;left:50%;transform:translateX(-50%);top:10px;z-index:7;background:var(--acc);color:#fff;padding:5px 12px;border-radius:14px;font-size:12px;display:none;pointer-events:none}
+  #help{position:absolute;right:70px;top:10px;z-index:9;display:none;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px 16px 14px;width:350px;max-height:85%;overflow:auto;box-shadow:0 10px 30px rgba(0,0,0,.5);font-size:12.5px;line-height:1.55}
+  #help h4{margin:10px 0 3px;font-size:13px;color:#fff}
+  #help h4:first-child{margin-top:0}
+  #help kbd{background:#2a2e39;border:1px solid #3a3f4c;border-radius:4px;padding:0 5px;font:11px monospace}
+  #help ul{margin:0;padding-left:18px}
   #toast{position:absolute;right:70px;bottom:40px;z-index:8;background:var(--panel);border:1px solid var(--line);padding:8px 12px;border-radius:8px;display:none;max-width:420px}
   #empty{position:absolute;inset:0;z-index:4;display:none;place-items:center;text-align:center;color:var(--mut)}
   .style-grp{display:flex;align-items:center;gap:6px;flex:none}
@@ -92,6 +97,7 @@
     </div>
     <div class="grow"></div>
     <span id="info" style="color:var(--mut);font-size:12px"></span>
+    <button class="btn" id="helpBtn" title="Tips and keyboard shortcuts">?</button>
     <button class="btn" id="shotBtn" title="Save PNG including drawings">Screenshot</button>
     <button class="btn" id="refBtn" title="Download the latest data from yfinance into the database">Refresh data</button>
   </header>
@@ -107,6 +113,22 @@
       <button data-r="245">1Y</button><button data-r="1225">5Y</button><button data-r="0">All</button>
     </div>
     <div id="hint"></div>
+    <div id="help">
+      <h4>Drawing</h4>
+      <ul><li>Pick a tool on the left, then click the <b>start</b> and <b>end</b> point (or click-and-drag).</li>
+      <li>Click a drawing to select it, drag it to move, drag its dots to reshape.</li>
+      <li><kbd>Del</kbd> deletes &middot; <kbd>Esc</kbd> cancels &middot; <kbd>Ctrl</kbd>+<kbd>Z</kbd> undoes.</li>
+      <li><b>Magnet</b> snaps to the open / high / low / close of the nearest bar.</li>
+      <li><b>Measure</b> shows the price change, % and number of bars between two points.</li></ul>
+      <h4>Moving around</h4>
+      <ul><li>Mouse wheel zooms, drag pans, drag the price axis to stretch it. Buttons bottom-left jump to 1M, 3M ... All.</li></ul>
+      <h4>VWAP</h4>
+      <ul><li>Indicators &#9662; &rarr; VWAP. It restarts every <b>quarter</b>, <b>year</b>, <b>month</b> or <b>week</b> (your choice).</li>
+      <li>Green lines are &plusmn;1&sigma; and blue dashed lines &plusmn;2&sigma; (volume-weighted standard deviations). Price beyond &plusmn;2&sigma; is statistically stretched.</li>
+      <li>The index itself often has no volume on Yahoo; then all days are weighted equally.</li></ul>
+      <h4>Saved automatically</h4>
+      <ul><li>Your drawings (per stock) and chart settings are stored in this browser.</li></ul>
+    </div>
     <div id="toast"></div>
     <div id="empty"><div><div style="font-size:18px;margin-bottom:6px">Database is empty</div>Click <b>Refresh data</b> to download IHSG history from yfinance.</div></div>
   </main>
@@ -141,6 +163,7 @@ function loadPrefs() { try { const p = JSON.parse(localStorage.getItem(PREF_KEY)
   S.log = !!p.log; S.magnet = !!p.magnet; if (!EMB && p.sym) S.sym = p.sym; } catch (e) {} }
 function savePrefs() { try { localStorage.setItem(PREF_KEY, JSON.stringify({tf: S.tf, type: S.type, ind: S.ind, vwap: S.vwap, log: S.log, magnet: S.magnet, sym: S.sym})); } catch (e) {} }
 loadPrefs();
+if (EMB && window.IHSG_DATA.vwap_per) { S.vwap.on = true; S.vwap.per = window.IHSG_DATA.vwap_per; }   // opened from a VWAP screen
 
 /* ------------------------------------------------------------------ chart */
 const chartEl = $('#chart'), wrap = $('#wrap');
@@ -637,7 +660,7 @@ window.addEventListener('mouseup', e => {
 window.addEventListener('keydown', e => {
   if (/INPUT|SELECT|TEXTAREA/.test(e.target.tagName)) return;
   if ((e.key === 'Delete' || e.key === 'Backspace') && S.selected) { pushHist(); S.drawings = S.drawings.filter(d => d.id !== S.selected); S.selected = null; save(); e.preventDefault(); }
-  else if (e.key === 'Escape') { S.measure = null; S.selected = null; setTool('cursor'); }
+  else if (e.key === 'Escape') { $('#help').style.display = 'none'; S.measure = null; S.selected = null; setTool('cursor'); }
   else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') { undo(); e.preventDefault(); }
 });
 
@@ -650,6 +673,8 @@ $('#col').addEventListener('input', e => { S.color = e.target.value; const d = S
 $('#wid').addEventListener('change', e => { S.width = +e.target.value; const d = S.drawings.find(x => x.id === S.selected); if (d) { d.width = S.width; save(); } });
 $('#delBtn').addEventListener('click', () => { if (!S.selected) return; pushHist(); S.drawings = S.drawings.filter(d => d.id !== S.selected); S.selected = null; save(); });
 $('#undoBtn').addEventListener('click', undo);
+$('#helpBtn').addEventListener('click', e => { const hp = $('#help'); hp.style.display = hp.style.display === 'block' ? 'none' : 'block'; e.stopPropagation(); });
+wrap.addEventListener('mousedown', () => { $('#help').style.display = 'none'; }, true);
 $('#clearBtn').addEventListener('click', () => { if (S.drawings.length && confirm('Remove all drawings?')) { pushHist(); S.drawings = []; S.selected = null; save(); } });
 
 $$('#tfSeg button').forEach(b => b.addEventListener('click', async () => {
@@ -734,6 +759,7 @@ function fitFrame() {
 (async () => {
   if (EMB) { $('#refBtn').style.display = 'none'; fitFrame(); [150, 600, 1500, 3500].forEach(t => setTimeout(fitFrame, t)); try { window.parent.addEventListener('resize', fitFrame); } catch (e) {} }
   applyPrefsUI();
+  try { if (!localStorage.getItem('ihsg_tip_v1')) { localStorage.setItem('ihsg_tip_v1', '1'); setTimeout(() => toast('Tip: pick a tool on the left to draw. Click ? for shortcuts.', 9000), 1500); } } catch (e) {}
   Object.keys(S.ind).forEach(id => { if (OVERLAYS[id] && S.ind[id]) setOverlay(id, true); });
   await loadDrawings();
   if (!(await loadData(false))) { S.sym = INDEX; await loadDrawings(); await loadData(false); }
